@@ -89,8 +89,8 @@ class GoldenDatasetLoader:
             # Extract user input from first turn
             user_input = self._extract_text(conversation[0].get('user_content', {}))
             
-            # Extract expected response from last turn
-            expected_response = self._extract_text(conversation[-1].get('final_response', {}))
+            # Extract expected response aligned to that first turn (so single-turn cases stay consistent)
+            expected_response = self._extract_text(conversation[0].get('final_response', {}))
             
             if user_input and expected_response:
                 test_case = TestCase(

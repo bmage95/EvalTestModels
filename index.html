@@ -394,12 +394,16 @@
             // Clear input
             input.value = '';
 
+            // Reset expected box until we set it
+            document.getElementById('gemini-expected').textContent = '[ expected will appear after send ]';
+            document.getElementById('chatgpt-expected').textContent = '[ expected will appear after send ]';
+
             // Determine if this matches a golden dataset case
             const matched = testCases.find(tc => getInputText(tc).toLowerCase() === value.toLowerCase());
             
-            if (matched || currentTestCase) {
-                // Use golden dataset expected
-                const goldenCase = matched || currentTestCase;
+            if (matched) {
+                // Use golden dataset expected only when the text matches a golden case
+                const goldenCase = matched;
                 expectedAnswer = getExpectedText(goldenCase);
                 currentTestCase = goldenCase;
                 
@@ -410,8 +414,11 @@
                 `;
                 console.log('✓ Using golden dataset expected for:', goldenCase.eval_id);
             } else {
-                // Generate expected answer via llama3
+                // Not a golden match: generate expected answer via llama3
                 expectedAnswer = await generateExpectedAnswer(value);
+                if (!expectedAnswer) {
+                    expectedAnswer = '[expected not available]';
+                }
                 currentTestCase = null;
                 
                 document.getElementById('testCaseSelect').value = '';
@@ -478,15 +485,15 @@
 
                 const result = await response.json();
 
-                passSpan.textContent = result.pass_score.toFixed(2);
-                thresholdSpan.textContent = result.threshold_score.toFixed(2);
+                const passScore = Number(result.pass_score ?? 0);
+                const threshScore = Number(result.threshold_score ?? 0);
+                // Pass/Fail per criteria: both metrics must meet their thresholds
+                const trajThreshold = Number(document.getElementById('metric1').value || 0); // tool_trajectory_avg_score
+                const respThreshold = Number(document.getElementById('metric2').value || 0); // response_match_score
+                const passed = passScore >= trajThreshold && threshScore >= respThreshold;
 
-                if (result.pass_score !== undefined) {
-                    document.getElementById('metric1').value = result.pass_score.toFixed(1);
-                }
-                if (result.threshold_score !== undefined) {
-                    document.getElementById('metric2').value = result.threshold_score.toFixed(1);
-                }
+                passSpan.textContent = passed ? `PASS (${passScore.toFixed(2)})` : `FAIL (${passScore.toFixed(2)})`;
+                thresholdSpan.textContent = `match ${threshScore.toFixed(2)}`;
 
                 console.log(`${modelType} evaluation:`, result);
 

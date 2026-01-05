@@ -69,18 +69,18 @@ class JudgeEvaluator:
         
         prompt = f"""You are an unbiased judge evaluating AI model responses.
 
-ACTUAL ANSWER:
-{actual_answer}
+    ACTUAL ANSWER:
+    {actual_answer}
 
-EXPECTED ANSWER:
-{expected_answer}
+    EXPECTED ANSWER:
+    {expected_answer}
 
-Evaluate on two metrics:
-1. Pass (0-1): Does the actual answer meet the basic requirement/intent? 
-2. Threshold (0-1): How close is the actual answer to the expected answer quality-wise?
+    Evaluate on two metrics:
+    1. Pass (0-1): Does the actual answer meet the basic requirement/intent?
+    2. Threshold (0-1): How close is the actual answer to the expected answer quality-wise?
 
-Respond in JSON format:
-{{"pass_score": <0-1>, "threshold_score": <0-1>, "reasoning": "<brief explanation>"}}"""
+    Respond ONLY in valid JSON on a single line, no code fences, no extra text:
+    {{"pass_score": <0-1>, "threshold_score": <0-1>, "reasoning": "<brief explanation>"}}"""
 
         try:
             response = requests.post(
@@ -95,14 +95,18 @@ Respond in JSON format:
             response.raise_for_status()
             
             result = response.json()
-            text = result.get("response", "")
-            
-            # Parse JSON response
+            text = (result.get("response", "") or "").strip()
+
             json_start = text.find("{")
             json_end = text.rfind("}") + 1
             if json_start != -1 and json_end > json_start:
                 json_str = text[json_start:json_end]
-                parsed = json.loads(json_str)
+                try:
+                    parsed = json.loads(json_str)
+                except Exception as parse_err:
+                    raise RuntimeError(
+                        f"Ollama evaluation failed: could not parse JSON: {parse_err} | raw='{text[:200]}'"
+                    ) from parse_err
                 
                 return EvalScore(
                     pass_score=float(parsed.get("pass_score", 0.5)),
@@ -111,6 +115,7 @@ Respond in JSON format:
                     judge_method="LLM-as-judge",
                     reasoning=parsed.get("reasoning", "")
                 )
+            raise RuntimeError(f"Ollama evaluation failed: no JSON object in response | raw='{text[:200]}'")
         except Exception as e:
             raise RuntimeError(f"Ollama evaluation failed: {str(e)}")
         
