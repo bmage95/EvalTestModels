@@ -73,31 +73,36 @@ class GoldenDatasetLoader:
             return False
     
     def _parse_test_cases(self):
-        """Extract test cases from raw JSON"""
+        """Extract test cases from raw JSON - one per conversation turn with text"""
         self.test_cases = []
         
         if not self.raw_data or 'eval_cases' not in self.raw_data:
             return
         
         for eval_case in self.raw_data['eval_cases']:
-            eval_id = eval_case.get('eval_id', 'unknown')
+            base_eval_id = eval_case.get('eval_id', 'unknown')
             conversation = eval_case.get('conversation', [])
             
             if not conversation:
                 continue
             
-            # Extract user input from first turn
-            user_input = self._extract_text(conversation[0].get('user_content', {}))
-            
-            # Extract expected response aligned to that first turn (so single-turn cases stay consistent)
-            expected_response = self._extract_text(conversation[0].get('final_response', {}))
-            
-            if user_input and expected_response:
+            # Create a TestCase for EACH turn that has text user_input
+            for idx, turn in enumerate(conversation):
+                user_input = self._extract_text(turn.get('user_content', {}))
+                expected_response = self._extract_text(turn.get('final_response', {}))
+                
+                # Skip turns without text input (e.g., image-only)
+                if not user_input or not expected_response:
+                    continue
+                
+                # Unique ID per turn
+                turn_eval_id = f"{base_eval_id}_turn{idx}" if len(conversation) > 1 else base_eval_id
+                
                 test_case = TestCase(
-                    eval_id=eval_id,
+                    eval_id=turn_eval_id,
                     user_input=user_input,
                     expected_response=expected_response,
-                    conversation_history=conversation
+                    conversation_history=conversation[:idx+1]  # history up to this turn
                 )
                 self.test_cases.append(test_case)
     
@@ -132,6 +137,16 @@ class GoldenDatasetLoader:
             'eval_set_name': self.raw_data.get('name', 'unknown') if self.raw_data else None,
             'test_cases': [tc.to_dict() for tc in self.test_cases[:5]]  # First 5
         }
+
+    def find_by_input(self, user_text: str) -> Optional[TestCase]:
+        """Find a test case whose user_input matches the provided text (case-insensitive, trimmed)."""
+        if not user_text:
+            return None
+        normalized = user_text.strip().lower()
+        for tc in self.test_cases:
+            if tc.user_input.strip().lower() == normalized:
+                return tc
+        return None
     
     def export_for_evaluation(self) -> Dict:
         """Export test cases in format ready for evaluation"""

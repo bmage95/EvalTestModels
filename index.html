@@ -398,21 +398,22 @@
             document.getElementById('gemini-expected').textContent = '[ expected will appear after send ]';
             document.getElementById('chatgpt-expected').textContent = '[ expected will appear after send ]';
 
-            // Determine if this matches a golden dataset case
-            const matched = testCases.find(tc => getInputText(tc).toLowerCase() === value.toLowerCase());
-            
-            if (matched) {
-                // Use golden dataset expected only when the text matches a golden case
-                const goldenCase = matched;
-                expectedAnswer = getExpectedText(goldenCase);
-                currentTestCase = goldenCase;
-                
-                document.getElementById('testCaseSelect').value = goldenCase.eval_id;
+            // Ask backend to find golden case by input (trim/case-insensitive)
+            const matched = await lookupGoldenByInput(value);
+            if (matched && matched.found && matched.case) {
+                expectedAnswer = matched.expected || '';
+                currentTestCase = {
+                    eval_id: matched.case.eval_id,
+                    user_input: matched.case.user_input,
+                    expected_response: matched.expected
+                };
+
+                document.getElementById('testCaseSelect').value = matched.case.eval_id;
                 document.getElementById('testCaseInfo').innerHTML = `
-                    <strong>Test Input:</strong> ${getInputText(goldenCase)}<br>
-                    <strong>Source:</strong> Golden Dataset (${goldenCase.eval_id.substring(0, 8)}...)
+                    <strong>Test Input:</strong> ${matched.case.user_input}<br>
+                    <strong>Source:</strong> Golden Dataset (${matched.case.eval_id.substring(0, 8)}...)
                 `;
-                console.log('✓ Using golden dataset expected for:', goldenCase.eval_id);
+                console.log('✓ Using golden dataset expected for:', matched.case.eval_id);
             } else {
                 // Not a golden match: generate expected answer via llama3
                 expectedAnswer = await generateExpectedAnswer(value);
@@ -492,8 +493,8 @@
                 const respThreshold = Number(document.getElementById('metric2').value || 0); // response_match_score
                 const passed = passScore >= trajThreshold && threshScore >= respThreshold;
 
-                passSpan.textContent = passed ? `PASS (${passScore.toFixed(2)})` : `FAIL (${passScore.toFixed(2)})`;
-                thresholdSpan.textContent = `match ${threshScore.toFixed(2)}`;
+                passSpan.textContent = passed ? `PASS (${passScore.toFixed(2)})(user intent)` : `FAIL (${passScore.toFixed(2)})(user intent)`;
+                thresholdSpan.textContent = `quality/similarity score: ${threshScore.toFixed(2)}`;
 
                 console.log(`${modelType} evaluation:`, result);
 
@@ -571,6 +572,23 @@
             } catch (error) {
                 console.error('Expected generation error:', error);
                 return '';
+            }
+        }
+
+        async function lookupGoldenByInput(promptText) {
+            try {
+                const response = await fetch(`${API_URL}/dataset/find-by-input`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: promptText })
+                });
+                if (response.status === 404) return null;
+                const data = await response.json();
+                if (!response.ok) throw new Error(data.error || 'lookup failed');
+                return data;
+            } catch (err) {
+                console.warn('Lookup error:', err.message);
+                return null;
             }
         }
 

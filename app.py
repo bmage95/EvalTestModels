@@ -343,6 +343,29 @@ def get_test_cases():
     })
 
 
+@app.route('/api/dataset/find-by-input', methods=['POST'])
+def find_by_input():
+    """Find a test case by user input (exact, case-insensitive, trimmed)."""
+    try:
+        data = request.json or {}
+        user_input = (data.get('input') or '').strip()
+        if not user_input:
+            return jsonify({'error': 'input is required'}), 400
+
+        tc = dataset_loader.find_by_input(user_input)
+        if not tc:
+            return jsonify({'found': False}), 404
+
+        return jsonify({
+            'found': True,
+            'case': tc.to_dict(),
+            'expected': tc.expected_response,
+            'input': tc.user_input
+        })
+    except Exception as e:
+        return jsonify({'error': f'Lookup failed: {str(e)}'}), 500
+
+
 @app.route('/api/dataset/evaluate-case/<case_id>', methods=['POST'])
 def evaluate_test_case(case_id):
     """
@@ -548,6 +571,7 @@ if __name__ == '__main__':
     print("  GET /api/health - Check backend status")
     print("  GET /api/dataset - Get dataset summary")
     print("  GET /api/dataset/test-cases - List all test cases")
+    print("  POST /api/dataset/find-by-input - Lookup case by user input")
     print("  POST /api/dataset/evaluate-case/<id> - Evaluate single test case")
     print("  POST /api/dataset/evaluate-batch - Evaluate multiple test cases")
     print("  POST /api/evaluate - Single judge evaluation")
