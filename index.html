@@ -1,0 +1,601 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Model Eval</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, sans-serif;
+            background-color: #b0b0b0;
+            min-height: 100vh;
+            padding: 40px 20px;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+        }
+
+        .header {
+            text-align: center;
+            margin-bottom: 40px;
+        }
+
+        .header h1 {
+            color: white;
+            font-size: 32px;
+            font-weight: 300;
+            letter-spacing: 1px;
+        }
+
+        .input-section {
+            display: flex;
+            gap: 12px;
+            justify-content: center;
+            margin-bottom: 40px;
+        }
+
+        .input-section input {
+            width: 350px;
+            padding: 12px 16px;
+            border: none;
+            border-radius: 0;
+            font-size: 14px;
+            background-color: white;
+            font-family: inherit;
+        }
+
+        .input-section input:focus {
+            outline: none;
+            background-color: #f5f5f5;
+        }
+
+        .send-btn {
+            background-color: #000;
+            color: white;
+            border: none;
+            padding: 12px 28px;
+            font-size: 14px;
+            font-weight: 500;
+            cursor: pointer;
+            font-family: inherit;
+            letter-spacing: 0.5px;
+            transition: background-color 0.2s;
+        }
+
+        .send-btn:hover {
+            background-color: #222;
+        }
+
+
+        .metrics-section {
+            display: flex;
+            justify-content: center;
+            gap: 80px;
+            margin-bottom: 50px;
+        }
+
+
+        .metric {
+            display: flex;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .metric-label {
+            color: white;
+            font-size: 16px;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+        }
+
+        .metric-value {
+            background-color: #1a1a1a;
+            color: white;
+            padding: 6px 14px;
+            font-size: 14px;
+            font-weight: 500;
+            border-radius: 2px;
+            min-width: 45px;
+            text-align: center;
+            border: none;
+            font-family: inherit;
+            cursor: text;
+        }
+
+        .metric-value:focus {
+            outline: none;
+            background-color: #2a2a2a;
+        }
+
+        .dataset-section {
+            display: none;
+            margin-bottom: 50px;
+            background-color: rgba(0, 0, 0, 0.2);
+            padding: 20px;
+            border-radius: 4px;
+        }
+
+        .dataset-section.active {
+            display: block;
+        }
+
+        .dataset-title {
+            color: white;
+            font-size: 14px;
+            font-weight: 500;
+            margin-bottom: 12px;
+            letter-spacing: 0.5px;
+            opacity: 0.9;
+        }
+
+        .test-case-select {
+            background-color: #1a1a1a;
+            color: white;
+            padding: 8px 12px;
+            border: none;
+            border-radius: 2px;
+            font-size: 14px;
+            font-family: inherit;
+            cursor: pointer;
+            min-width: 300px;
+        }
+
+        .test-case-select:hover {
+            background-color: #2a2a2a;
+        }
+
+        .test-case-info {
+            color: white;
+            font-size: 12px;
+            margin-top: 8px;
+            opacity: 0.8;
+            max-width: 500px;
+        }
+
+        .metrics-section {
+            display: flex;
+            justify-content: center;
+            gap: 80px;
+            margin-bottom: 50px;
+        }
+
+        .model-card {
+            text-align: center;
+        }
+
+        .model-name {
+            color: white;
+            font-size: 28px;
+            font-weight: 300;
+            margin-bottom: 20px;
+            letter-spacing: 0.5px;
+        }
+
+        .answer-container {
+            display: flex;
+            gap: 20px;
+            margin-bottom: 16px;
+        }
+
+        .answer-box {
+            background-color: #000;
+            color: white;
+            padding: 40px 20px;
+            min-height: 300px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-size: 14px;
+            line-height: 1.6;
+            text-align: center;
+            flex: 1;
+        }
+
+        .divider {
+            width: 0.5px;
+            background-color: white;
+        }
+
+        .eval-score {
+            color: white;
+            font-size: 16px;
+            font-weight: 300;
+            letter-spacing: 0.5px;
+        }
+
+        @media (max-width: 1024px) {
+            .models-grid {
+                grid-template-columns: 1fr;
+            }
+
+            .metrics-section {
+                flex-direction: column;
+                gap: 20px;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>Model Eval</h1>
+        </div>
+
+        <div class="input-section">
+            <input type="text" placeholder="" id="inputField">
+            <button class="send-btn">send</button>
+        </div>
+
+        <div class="dataset-section" id="datasetSection">
+            <div class="dataset-title">📊 Load Test Case from Golden Dataset</div>
+            <select class="test-case-select" id="testCaseSelect">
+                <option value="">-- Select a test case --</option>
+            </select>
+            <div class="test-case-info" id="testCaseInfo"></div>
+        </div>
+
+        <div class="metrics-section">
+            <div class="metric">
+                <span class="metric-label">tool_trajectory_avg_score</span>
+                <input type="number" step="0.1" min="0" max="1" class="metric-value" id="metric1" value="1.0" required>
+            </div>
+            <div class="metric">
+                <span class="metric-label">response_match_score</span>
+                <input type="number" step="0.1" min="0" max="1" class="metric-value" id="metric2" value="0.8" required>
+            </div>
+        </div>
+
+        <div class="models-grid">
+            <!-- Gemini -->
+            <div class="model-card">
+                <h2 class="model-name">Gemini</h2>
+                <div class="answer-container">
+                    <div class="answer-box" id="gemini-actual">
+                        [ actual answer ]
+                    </div>
+                    <div class="divider"></div>
+                    <div class="answer-box" id="gemini-expected">
+                        [ expected answer ]
+                    </div>
+                </div>
+                <p class="eval-score">Eval Score: <span id="gemini-pass">Pass</span> & <span id="gemini-threshold">Threshold</span></p>
+            </div>
+
+            <!-- ChatGPT -->
+            <div class="model-card">
+                <h2 class="model-name">ChatGPT</h2>
+                <div class="answer-container">
+                    <div class="answer-box" id="chatgpt-actual">
+                        [ actual answer ]
+                    </div>
+                    <div class="divider"></div>
+                    <div class="answer-box" id="chatgpt-expected">
+                        [ expected answer ]
+                    </div>
+                </div>
+                <p class="eval-score">Eval Score: <span id="chatgpt-pass">Pass</span> & <span id="chatgpt-threshold">Threshold</span></p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const API_URL = 'http://localhost:5000/api';
+        let expectedAnswer = '';
+        let currentTestCase = null;
+        let testCases = [];
+
+        const getInputText = (tc) => (tc?.user_input || tc?.input || '').trim();
+        const getExpectedText = (tc) => (tc?.expected_response || tc?.expected || '').trim();
+
+        // Check backend health and load golden dataset
+        window.addEventListener('load', async () => {
+            try {
+                const response = await fetch(`${API_URL}/health`);
+                const data = await response.json();
+                console.log('Backend Status:', data);
+                
+                if (!data.ollama_available) {
+                    console.warn('⚠️ Ollama not available. Install from https://ollama.ai');
+                }
+                
+                // Load golden dataset test cases
+                if (data.dataset_loaded) {
+                    loadTestCases();
+                }
+            } catch (error) {
+                console.error('Backend not reachable. Make sure to run: python app.py', error);
+            }
+        });
+
+        // Load test cases from golden dataset
+        async function loadTestCases() {
+            try {
+                const response = await fetch(`${API_URL}/dataset/test-cases`);
+                const data = await response.json();
+                
+                testCases = data.cases || [];
+                console.log(`Loaded ${testCases.length} test cases from golden dataset`);
+                
+                // Show dataset section
+                document.getElementById('datasetSection').classList.add('active');
+                
+                // Populate dropdown
+                const select = document.getElementById('testCaseSelect');
+                testCases.forEach(tc => {
+                    const option = document.createElement('option');
+                    option.value = tc.eval_id;
+                    option.textContent = `${tc.eval_id.substring(0, 8)}... - "${tc.user_input.substring(0, 40)}..."`;
+                    select.appendChild(option);
+                });
+                
+                // Handle selection
+                select.addEventListener('change', selectTestCase);
+            } catch (error) {
+                console.warn('Could not load test cases:', error);
+            }
+        }
+
+        // Select a test case from dropdown
+        function selectTestCase(e) {
+            const eval_id = e.target.value;
+            if (!eval_id) return;
+            
+            currentTestCase = testCases.find(tc => tc.eval_id === eval_id);
+            if (!currentTestCase) return;
+            
+            // Store but don't show expected yet - will show after clicking send
+            expectedAnswer = '';
+            
+            // Show test case info (without revealing expected)
+            const info = document.getElementById('testCaseInfo');
+            info.innerHTML = `
+                <strong>Test Input:</strong> ${getInputText(currentTestCase)}<br>
+                <strong>Status:</strong> Ready to evaluate - click Send
+            `;
+            
+            // Clear expected boxes
+            document.getElementById('gemini-expected').textContent = '[ expected will appear after send ]';
+            document.getElementById('chatgpt-expected').textContent = '[ expected will appear after send ]';
+            
+            // Clear actual answers
+            document.getElementById('gemini-actual').textContent = '[ waiting for response ]';
+            document.getElementById('chatgpt-actual').textContent = '[ waiting for response ]';
+            
+            // Clear scores
+            document.getElementById('gemini-pass').textContent = 'Pass';
+            document.getElementById('gemini-threshold').textContent = 'Threshold';
+            document.getElementById('chatgpt-pass').textContent = 'Pass';
+            document.getElementById('chatgpt-threshold').textContent = 'Threshold';
+            
+            // Auto-fill input field with test case input
+            document.getElementById('inputField').value = getInputText(currentTestCase);
+            
+            console.log('Test case selected:', currentTestCase.eval_id);
+        }
+
+        // Send button functionality
+        document.querySelector('.send-btn').addEventListener('click', async function() {
+            const input = document.getElementById('inputField');
+            const value = input.value.trim();
+            
+            if (!value) {
+                alert('Please enter a prompt or select a test case');
+                return;
+            }
+
+            // Clear input
+            input.value = '';
+
+            // Determine if this matches a golden dataset case
+            const matched = testCases.find(tc => getInputText(tc).toLowerCase() === value.toLowerCase());
+            
+            if (matched || currentTestCase) {
+                // Use golden dataset expected
+                const goldenCase = matched || currentTestCase;
+                expectedAnswer = getExpectedText(goldenCase);
+                currentTestCase = goldenCase;
+                
+                document.getElementById('testCaseSelect').value = goldenCase.eval_id;
+                document.getElementById('testCaseInfo').innerHTML = `
+                    <strong>Test Input:</strong> ${getInputText(goldenCase)}<br>
+                    <strong>Source:</strong> Golden Dataset (${goldenCase.eval_id.substring(0, 8)}...)
+                `;
+                console.log('✓ Using golden dataset expected for:', goldenCase.eval_id);
+            } else {
+                // Generate expected answer via llama3
+                expectedAnswer = await generateExpectedAnswer(value);
+                currentTestCase = null;
+                
+                document.getElementById('testCaseSelect').value = '';
+                document.getElementById('testCaseInfo').innerHTML = `
+                    <strong>Test Input:</strong> ${value}<br>
+                    <strong>Source:</strong> Generated Expected (not in golden dataset)
+                `;
+                console.log('✓ Generated expected answer via llama3');
+            }
+
+            // Show expected in UI
+            document.getElementById('gemini-expected').textContent = expectedAnswer;
+            document.getElementById('chatgpt-expected').textContent = expectedAnswer;
+
+            // Generate model answers
+            await generateAnswers(value);
+            
+            // Evaluate with Ollama judge
+            await evaluateAllModels();
+        });
+
+        // Allow Enter key to send
+        document.getElementById('inputField').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                document.querySelector('.send-btn').click();
+            }
+        });
+
+        async function evaluateModel(modelType) {
+            const passSpan = document.getElementById(`${modelType}-pass`);
+            const thresholdSpan = document.getElementById(`${modelType}-threshold`);
+            const actualEl = document.getElementById(`${modelType}-actual`);
+
+            const actualAnswer = actualEl.textContent.trim();
+            if (!actualAnswer || actualAnswer.startsWith('[ waiting') || actualAnswer.startsWith('[error')) {
+                return; // skip empty
+            }
+            if (!expectedAnswer) {
+                alert('Please set expected answer first');
+                return;
+            }
+
+            passSpan.textContent = 'Evaluating...';
+            thresholdSpan.textContent = 'Evaluating...';
+
+            try {
+                const judgeModel = 'ollama';
+                const response = await fetch(`${API_URL}/evaluate`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        actual_answer: actualAnswer,
+                        expected_answer: expectedAnswer,
+                        judge_model: judgeModel
+                    })
+                });
+
+                if (!response.ok) {
+                    const error = await response.json();
+                    throw new Error(error.error || 'Evaluation failed');
+                }
+
+                const result = await response.json();
+
+                passSpan.textContent = result.pass_score.toFixed(2);
+                thresholdSpan.textContent = result.threshold_score.toFixed(2);
+
+                if (result.pass_score !== undefined) {
+                    document.getElementById('metric1').value = result.pass_score.toFixed(1);
+                }
+                if (result.threshold_score !== undefined) {
+                    document.getElementById('metric2').value = result.threshold_score.toFixed(1);
+                }
+
+                console.log(`${modelType} evaluation:`, result);
+
+            } catch (error) {
+                console.error('Evaluation error:', error);
+                passSpan.textContent = 'Error';
+                thresholdSpan.textContent = 'Error';
+                alert(`Evaluation failed: ${error.message}`);
+            }
+        }
+
+        async function generateAnswers(promptText) {
+            if (!promptText) return;
+
+            const models = ['gemini', 'chatgpt'];
+            models.forEach(model => {
+                const el = document.getElementById(`${model}-actual`);
+                el.textContent = '[ generating answer... ]';
+            });
+
+            try {
+                const response = await fetch(`${API_URL}/generate-answers`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        input: promptText,
+                        eval_id: currentTestCase?.eval_id || null,
+                        models
+                    })
+                });
+
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Generation failed');
+                }
+
+                const answers = data.answers || {};
+                const setAnswer = (key) => {
+                    const el = document.getElementById(`${key}-actual`);
+                    if (!el) return;
+                    const payload = answers[key] || {};
+                    if (payload.text) {
+                        el.textContent = payload.text;
+                    } else if (payload.error) {
+                        el.textContent = `[error: ${payload.error}]`;
+                    } else {
+                        el.textContent = '[ no answer returned ]';
+                    }
+                };
+
+                models.forEach(setAnswer);
+                console.log('Generated answers:', answers);
+            } catch (error) {
+                console.error('Generation error:', error);
+                models.forEach(model => {
+                    const el = document.getElementById(`${model}-actual`);
+                    el.textContent = `[error: ${error.message}]`;
+                });
+            }
+        }
+
+        async function generateExpectedAnswer(promptText) {
+            if (!promptText) return '';
+            try {
+                const response = await fetch(`${API_URL}/generate-expected`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ input: promptText })
+                });
+                const data = await response.json();
+                if (!response.ok) {
+                    throw new Error(data.error || 'Expected generation failed');
+                }
+                return data.expected || '';
+            } catch (error) {
+                console.error('Expected generation error:', error);
+                return '';
+            }
+        }
+
+        async function evaluateAllModels() {
+            await evaluateModel('gemini');
+            await evaluateModel('chatgpt');
+        }
+
+        // Evaluate on clicking any actual box
+        document.addEventListener('click', async function(e) {
+            if (e.target.classList.contains('answer-box') && e.target.id && e.target.id.endsWith('-actual')) {
+                const modelType = e.target.id.split('-')[0];
+                await evaluateModel(modelType);
+            }
+        });
+
+        // Optionally auto-evaluate when expectedAnswer changes and actuals exist
+        async function maybeAutoEvaluate() {
+            if (expectedAnswer) {
+                await evaluateAllModels();
+            }
+        }
+
+        // Allow editing answer boxes (click to input)
+        const answerBoxes = document.querySelectorAll('.answer-box');
+        answerBoxes.forEach(box => {
+            box.contentEditable = 'true';
+            box.addEventListener('blur', function() {
+                // Save content
+                console.log(`${this.id} updated:`, this.textContent);
+            });
+        });
+    </script>
+</body>
+</html>
