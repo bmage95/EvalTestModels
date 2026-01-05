@@ -61,9 +61,6 @@ def evaluate():
                 }), 503
             result = evaluator.evaluate_with_ollama(actual_answer, expected_answer)
         
-        elif judge_model == 'claude':
-            result = evaluator.evaluate_with_claude(actual_answer, expected_answer)
-        
         elif judge_model == 'gpt4':
             result = evaluator.evaluate_with_gpt4(actual_answer, expected_answer)
         
@@ -155,15 +152,14 @@ def evaluate_multi():
 @app.route('/api/evaluate-all-models', methods=['POST'])
 def evaluate_all_models():
     """
-    Evaluate three models (Claude, Gemini, ChatGPT responses)
+    Evaluate two models (Gemini, ChatGPT responses)
     
     Expected JSON:
     {
-        "claude_answer": "string",
         "gemini_answer": "string", 
         "chatgpt_answer": "string",
         "expected_answer": "string",
-        "judge_model": "ollama" (or claude/gpt4)
+        "judge_model": "ollama" (or gpt4)
     }
     """
     try:
@@ -175,7 +171,7 @@ def evaluate_all_models():
         if not expected:
             return jsonify({'error': 'expected_answer is required'}), 400
         
-        models = ['claude_answer', 'gemini_answer', 'chatgpt_answer']
+        models = ['gemini_answer', 'chatgpt_answer']
         results = {}
         
         for model_key in models:
@@ -190,9 +186,6 @@ def evaluate_all_models():
                         results[model_key] = {'error': 'Ollama not available'}
                         continue
                     score = evaluator.evaluate_with_ollama(actual, expected)
-                
-                elif judge_model == 'claude':
-                    score = evaluator.evaluate_with_claude(actual, expected)
                 
                 elif judge_model == 'gpt4':
                     score = evaluator.evaluate_with_gpt4(actual, expected)
@@ -400,11 +393,6 @@ def evaluate_test_case(case_id):
                 actual_answer, 
                 test_case.expected_response
             )
-        elif judge_model == 'claude':
-            result = evaluator.evaluate_with_claude(
-                actual_answer, 
-                test_case.expected_response
-            )
         elif judge_model == 'gpt4':
             result = evaluator.evaluate_with_gpt4(
                 actual_answer, 
@@ -501,11 +489,6 @@ def evaluate_batch():
                         batch_results['stats']['failed'] += 1
                         continue
                     result = evaluator.evaluate_with_ollama(
-                        actual_answer, 
-                        test_case.expected_response
-                    )
-                elif judge_model == 'claude':
-                    result = evaluator.evaluate_with_claude(
                         actual_answer, 
                         test_case.expected_response
                     )
