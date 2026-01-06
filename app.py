@@ -3,7 +3,19 @@ Flask API server to handle evaluation requests from frontend
 """
 from flask import Flask, request, jsonify
 from flask_cors import CORS
-from eval_backend import JudgeEvaluator, JudgeType
+from dotenv import load_dotenv
+import os
+
+# Load environment variables from .env file
+load_dotenv()
+
+from eval_backend import (
+    JudgeEvaluator,
+    JudgeType,
+    GEMINI_MODELS,
+    PRIMARY_JUDGE,
+    FALLBACK_JUDGE,
+)
 from golden_dataset import GoldenDatasetLoader
 import json
 
@@ -13,7 +25,27 @@ CORS(app)  # Enable CORS for frontend communication
 # Initialize evaluator and dataset loader
 evaluator = JudgeEvaluator()
 dataset_loader = GoldenDatasetLoader()
-DEFAULT_GEMINI_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
+DEFAULT_GEMINI_MODELS = GEMINI_MODELS  # Use 5 Gemini models from eval_backend
+
+# Pre-index golden dataset in vector DB
+def preindex_golden_dataset():
+    """Store all golden dataset expected answers in ChromaDB on startup"""
+    if not evaluator.collection or not evaluator.embedding_model:
+        return
+    
+    test_cases = dataset_loader.get_test_cases()
+    if not test_cases:
+        return
+    
+    print(f"\nIndexing {len(test_cases)} golden dataset cases in vector DB...")
+    indexed = 0
+    for tc in test_cases:
+        if evaluator.store_expected_answer(tc.eval_id, tc.user_input, tc.expected_response):
+            indexed += 1
+    print(f"✓ Indexed {indexed}/{len(test_cases)} cases in ChromaDB\n")
+
+# Run pre-indexing
+preindex_golden_dataset()
 
 
 @app.route('/api/health', methods=['GET'])
@@ -22,9 +54,13 @@ def health():
     return jsonify({
         'status': 'healthy',
         'ollama_available': evaluator.ollama_available,
-        'openai_available': getattr(evaluator, 'openai_available', False),
+        'litellm_available': getattr(evaluator, 'litellm_available', False),
         'gemini_available': getattr(evaluator, 'gemini_available', False),
         'gemini_default_models': DEFAULT_GEMINI_MODELS,
+        'judge_primary': PRIMARY_JUDGE,
+        'judge_fallback': FALLBACK_JUDGE,
+        'vector_db_available': evaluator.chroma_client is not None,
+        'embeddings_available': evaluator.embedding_model is not None,
         'dataset_loaded': len(dataset_loader.get_test_cases()) > 0,
         'test_cases_available': len(dataset_loader.get_test_cases()),
         'message': 'Backend is running'
@@ -40,8 +76,8 @@ def evaluate():
     {
         "actual_answer": "string",
         "expected_answer": "string",
-        "judge_model": "string (ollama)",
-        "judges": ["ollama"] (optional, default: ["ollama"])
+        "judge_model": "string (llama70b/ollama/gpt4)",
+        "judges": ["llama70b"] (optional)
     }
     """
     try:
@@ -49,7 +85,7 @@ def evaluate():
         
         actual_answer = data.get('actual_answer', '')
         expected_answer = data.get('expected_answer', '')
-        judge_model = data.get('judge_model', 'ollama').lower()
+        judge_model = data.get('judge_model', 'llama70b').lower()
         
         if not actual_answer or not expected_answer:
             return jsonify({
@@ -57,16 +93,18 @@ def evaluate():
             }), 400
         
         # Single judge evaluation
-        if judge_model == 'ollama':
+        if judge_model in ['llama', 'llama70b', 'primary']:
+            result = evaluator.evaluate_with_judge(actual_answer, expected_answer)
+        elif judge_model in ['llama13b', 'fallback']:
+            result = evaluator.evaluate_with_judge(actual_answer, expected_answer, judge_model=FALLBACK_JUDGE)
+        elif judge_model == 'ollama':
             if not evaluator.ollama_available:
                 return jsonify({
                     'error': 'Ollama not available. Install from https://ollama.ai'
                 }), 503
             result = evaluator.evaluate_with_ollama(actual_answer, expected_answer)
-        
         elif judge_model == 'gpt4':
             result = evaluator.evaluate_with_gpt4(actual_answer, expected_answer)
-        
         else:
             return jsonify({'error': f'Unknown judge model: {judge_model}'}), 400
         
@@ -75,7 +113,8 @@ def evaluate():
             'threshold_score': result.threshold_score,
             'judge_model': result.judge_model,
             'judge_method': result.judge_method,
-            'reasoning': result.reasoning
+            'reasoning': result.reasoning,
+            'semantic_score': result.semantic_score
         })
     
     except RuntimeError as e:
@@ -93,7 +132,7 @@ def evaluate_multi():
     {
         "actual_answer": "string",
         "expected_answer": "string",
-        "judges": ["ollama", "claude", "gpt4"] (optional)
+        "judges": ["llama70b", "llama13b", "ollama", "gpt4"] (optional)
     }
     """
     try:
@@ -101,50 +140,58 @@ def evaluate_multi():
         
         actual_answer = data.get('actual_answer', '')
         expected_answer = data.get('expected_answer', '')
-        judge_names = data.get('judges', ['ollama'])
+        judge_names = data.get('judges', ['llama70b'])
         
         if not actual_answer or not expected_answer:
             return jsonify({
                 'error': 'actual_answer and expected_answer are required'
             }), 400
         
-        # Convert judge names to JudgeType enums
-        judges = []
-        for name in judge_names:
-            try:
-                judges.append(JudgeType[name.upper()])
-            except KeyError:
-                return jsonify({'error': f'Unknown judge: {name}'}), 400
-        
-        results = evaluator.evaluate_multi_judge(actual_answer, expected_answer, judges)
-        
-        if not results:
-            return jsonify({
-                'error': 'No judges succeeded. Check Ollama/API keys'
-            }), 503
-        
-        # Format results
         formatted = {}
-        for judge_name, score in results.items():
-            formatted[judge_name] = {
-                'pass_score': score.pass_score,
-                'threshold_score': score.threshold_score,
-                'judge_model': score.judge_model,
-                'judge_method': score.judge_method,
-                'reasoning': score.reasoning
-            }
-        
-        # Get consensus
-        avg_pass, avg_threshold, judge_names_str = evaluator.get_consensus_score(
-            actual_answer, expected_answer, judges
-        )
-        
+        passes = []
+        thresholds = []
+        judge_labels = []
+
+        for name in judge_names:
+            lname = name.lower()
+            try:
+                if lname in ['llama', 'llama70b', 'primary']:
+                    score = evaluator.evaluate_with_judge(actual_answer, expected_answer)
+                elif lname in ['llama13b', 'fallback']:
+                    score = evaluator.evaluate_with_judge(actual_answer, expected_answer, judge_model=FALLBACK_JUDGE)
+                elif lname == 'ollama':
+                    score = evaluator.evaluate_with_ollama(actual_answer, expected_answer)
+                elif lname == 'gpt4':
+                    score = evaluator.evaluate_with_gpt4(actual_answer, expected_answer)
+                else:
+                    return jsonify({'error': f'Unknown judge: {name}'}), 400
+
+                formatted[name] = {
+                    'pass_score': score.pass_score,
+                    'threshold_score': score.threshold_score,
+                    'judge_model': score.judge_model,
+                    'judge_method': score.judge_method,
+                    'reasoning': score.reasoning,
+                    'semantic_score': score.semantic_score,
+                }
+                passes.append(score.pass_score)
+                thresholds.append(score.threshold_score)
+                judge_labels.append(score.judge_model)
+            except Exception as e:
+                formatted[name] = {'error': str(e)}
+
+        if not passes:
+            return jsonify({'error': 'No judges succeeded. Check LiteLLM/Ollama setup'}), 503
+
+        avg_pass = sum(passes) / len(passes)
+        avg_threshold = sum(thresholds) / len(thresholds)
+
         return jsonify({
             'individual_results': formatted,
             'consensus': {
                 'pass_score': avg_pass,
                 'threshold_score': avg_threshold,
-                'judges_used': judge_names_str
+                'judges_used': ", ".join(judge_labels)
             }
         })
     
@@ -162,14 +209,14 @@ def evaluate_all_models():
         "answers": {"<model_name>": "string"},
         "expected_answer": "string",
         "models": ["gemini-1.5-flash", "gemini-1.5-pro"],
-        "judge_model": "ollama" (or gpt4)
+        "judge_model": "llama70b" (or gpt4/ollama)
     }
     """
     try:
         data = request.json
         
         expected = data.get('expected_answer', '')
-        judge_model = data.get('judge_model', 'ollama').lower()
+        judge_model = data.get('judge_model', 'llama70b').lower()
         answers_payload = data.get('answers') or {}
         if not answers_payload:
             # Backwards compatibility: pick any *_answer fields
@@ -192,24 +239,27 @@ def evaluate_all_models():
                 continue
             
             try:
-                if judge_model == 'ollama':
+                if judge_model in ['llama', 'llama70b', 'primary']:
+                    score = evaluator.evaluate_with_judge(actual, expected)
+                elif judge_model in ['llama13b', 'fallback']:
+                    score = evaluator.evaluate_with_judge(actual, expected, judge_model=FALLBACK_JUDGE)
+                elif judge_model == 'ollama':
                     if not evaluator.ollama_available:
                         results[model_key] = {'error': 'Ollama not available'}
                         continue
                     score = evaluator.evaluate_with_ollama(actual, expected)
-                
                 elif judge_model == 'gpt4':
                     score = evaluator.evaluate_with_gpt4(actual, expected)
-                
                 else:
                     results[model_key] = {'error': f'Unknown judge: {judge_model}'}
                     continue
-                
+
                 results[model_key] = {
                     'pass_score': score.pass_score,
                     'threshold_score': score.threshold_score,
                     'judge_model': score.judge_model,
-                    'reasoning': score.reasoning
+                    'reasoning': score.reasoning,
+                    'semantic_score': score.semantic_score
                 }
             
             except Exception as e:
@@ -275,7 +325,7 @@ def generate_answers():
 def generate_expected():
     """
     Generate an expected response when the input is not in the golden dataset.
-    Uses Ollama llama3 when available; falls back to OpenAI if configured.
+    Uses Gemini via LiteLLM; falls back to Ollama llama3 if needed.
     Expected JSON:
     {
         "input": "user question"
@@ -289,14 +339,15 @@ def generate_expected():
 
         prompt = f"Provide a concise, high-quality answer for this user message.\n\nUser: {user_input}\nAnswer:"
 
-        if evaluator.ollama_available:
-            expected = evaluator.generate_with_ollama(prompt, model="llama3")
-            source = 'ollama:llama3'
-        elif evaluator.openai_available:
-            expected = evaluator.generate_with_ollama(prompt, model="llama2")
-            source = 'ollama:llama2'
-        else:
-            return jsonify({'error': 'No generation backend available (Ollama 3 or 2)'}), 503
+        try:
+            expected = evaluator.generate_with_gemini(prompt, model=DEFAULT_GEMINI_MODELS[0])
+            source = f'gemini:{DEFAULT_GEMINI_MODELS[0]}'
+        except Exception:
+            if evaluator.ollama_available:
+                expected = evaluator.generate_with_ollama(prompt, model="llama3")
+                source = 'ollama:llama3'
+            else:
+                return jsonify({'error': 'No generation backend available (Gemini or Ollama)'}), 503
 
         return jsonify({
             'expected': expected,
@@ -356,7 +407,7 @@ def evaluate_test_case(case_id):
     Expected JSON:
     {
         "actual_answer": "string (agent output)",
-        "judge_model": "ollama" (optional)
+        "judge_model": "llama70b" (optional)
     }
     """
     try:
@@ -367,24 +418,28 @@ def evaluate_test_case(case_id):
         
         data = request.json
         actual_answer = data.get('actual_answer', '')
-        judge_model = data.get('judge_model', 'ollama').lower()
+        judge_model = data.get('judge_model', 'llama70b').lower()
         
         if not actual_answer:
             return jsonify({'error': 'actual_answer is required'}), 400
         
         # Evaluate using judge
-        if judge_model == 'ollama':
+        if judge_model in ['llama', 'llama70b', 'primary']:
+            result = evaluator.evaluate_with_judge(actual_answer, test_case.expected_response)
+        elif judge_model in ['llama13b', 'fallback']:
+            result = evaluator.evaluate_with_judge(actual_answer, test_case.expected_response, judge_model=FALLBACK_JUDGE)
+        elif judge_model == 'ollama':
             if not evaluator.ollama_available:
                 return jsonify({
                     'error': 'Ollama not available. Install from https://ollama.ai'
                 }), 503
             result = evaluator.evaluate_with_ollama(
-                actual_answer, 
+                actual_answer,
                 test_case.expected_response
             )
         elif judge_model == 'gpt4':
             result = evaluator.evaluate_with_gpt4(
-                actual_answer, 
+                actual_answer,
                 test_case.expected_response
             )
         else:
@@ -399,7 +454,8 @@ def evaluate_test_case(case_id):
             'threshold_score': result.threshold_score,
             'judge_model': result.judge_model,
             'judge_method': result.judge_method,
-            'reasoning': result.reasoning
+            'reasoning': result.reasoning,
+            'semantic_score': result.semantic_score
         })
     
     except Exception as e:
@@ -420,13 +476,13 @@ def evaluate_batch():
             },
             ...
         ],
-        "judge_model": "ollama"
+        "judge_model": "llama70b"
     }
     """
     try:
         data = request.json
         results_data = data.get('results', [])
-        judge_model = data.get('judge_model', 'ollama').lower()
+        judge_model = data.get('judge_model', 'llama70b').lower()
         
         if not results_data:
             return jsonify({'error': 'results array is required'}), 400
@@ -469,7 +525,11 @@ def evaluate_batch():
             
             try:
                 # Evaluate
-                if judge_model == 'ollama':
+                if judge_model in ['llama', 'llama70b', 'primary']:
+                    result = evaluator.evaluate_with_judge(actual_answer, test_case.expected_response)
+                elif judge_model in ['llama13b', 'fallback']:
+                    result = evaluator.evaluate_with_judge(actual_answer, test_case.expected_response, judge_model=FALLBACK_JUDGE)
+                elif judge_model == 'ollama':
                     if not evaluator.ollama_available:
                         batch_results['results'].append({
                             'case_id': case_id,
@@ -478,12 +538,12 @@ def evaluate_batch():
                         batch_results['stats']['failed'] += 1
                         continue
                     result = evaluator.evaluate_with_ollama(
-                        actual_answer, 
+                        actual_answer,
                         test_case.expected_response
                     )
                 elif judge_model == 'gpt4':
                     result = evaluator.evaluate_with_gpt4(
-                        actual_answer, 
+                        actual_answer,
                         test_case.expected_response
                     )
                 else:
@@ -528,9 +588,16 @@ def evaluate_batch():
 
 if __name__ == '__main__':
     print("\n" + "="*60)
-    print("MODEL EVAL BACKEND")
+    print("MODEL EVAL BACKEND (LiteLLM + LLaMA Judges)")
     print("="*60)
-    print(f"Ollama Status: {'✓ Available' if evaluator.ollama_available else '✗ Not running'}")
+    print(f"LiteLLM: {'✓ Available' if evaluator.litellm_available else '✗ Not installed'}")
+    print(f"Ollama: {'✓ Running' if evaluator.ollama_available else '✗ Not running'}")
+    print(f"Gemini API: {'✓ Configured' if evaluator.gemini_available else '✗ Not configured'}")
+    print(f"Vector DB: {'✓ Available' if evaluator.chroma_client else '✗ Not available'}")
+    print(f"Embeddings: {'✓ Available' if evaluator.embedding_model else '✗ Not available'}")
+    print(f"\nGemini Models: {len(GEMINI_MODELS)} available")
+    for i, model in enumerate(GEMINI_MODELS, 1):
+        print(f"  {i}. {model}")
     
     # Print dataset info
     dataset_summary = dataset_loader.get_summary()
@@ -538,6 +605,14 @@ if __name__ == '__main__':
         print(f"Golden Dataset: ✓ Loaded ({dataset_summary['total_cases']} test cases)")
     else:
         print(f"Golden Dataset: ✗ No test cases found")
+    
+    if not evaluator.chroma_client:
+        print("\n⚠️  ChromaDB Setup (optional, for semantic scoring):")
+        print("   1. pip uninstall -y numpy")
+        print("   2. pip install --force-reinstall 'numpy<2.0'")
+        print("   3. pip install --force-reinstall 'chromadb==0.5.3'")
+        print("   4. pip install --force-reinstall 'sentence-transformers==2.3.1'")
+        print("   Then restart the app.")
     
     print("\nAPI Endpoints:")
     print("  GET /api/health - Check backend status")

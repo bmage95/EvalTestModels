@@ -297,6 +297,12 @@
                 <label for="modelBSelect">Model B</label>
                 <select id="modelBSelect"></select>
             </div>
+            <div class="model-select">
+                <label for="modelCSelect">Model C (Optional)</label>
+                <select id="modelCSelect">
+                    <option value="">-- None --</option>
+                </select>
+            </div>
         </div>
 
         <div class="models-grid">
@@ -327,6 +333,20 @@
                 </div>
                 <p class="eval-score">Eval Score: <span id="modelB-pass">Pass</span> & <span id="modelB-threshold">Threshold</span></p>
             </div>
+
+            <div class="model-card" id="modelC-card" style="display:none;">
+                <h2 class="model-name" id="modelC-name">Model C</h2>
+                <div class="answer-container">
+                    <div class="answer-box" id="modelC-actual">
+                        [ actual answer ]
+                    </div>
+                    <div class="divider"></div>
+                    <div class="answer-box" id="modelC-expected">
+                        [ expected answer ]
+                    </div>
+                </div>
+                <p class="eval-score">Eval Score: <span id="modelC-pass">Pass</span> & <span id="modelC-threshold">Threshold</span></p>
+            </div>
         </div>
     </div>
 
@@ -335,10 +355,11 @@
         let expectedAnswer = '';
         let currentTestCase = null;
         let testCases = [];
-        let availableGeminiModels = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+        let availableGeminiModels = ['gemini-1.5-flash', 'gemini-1.5-flash-8b', 'gemini-1.5-pro', 'gemini-2.0-flash-exp', 'gemini-1.0-pro'];
         const selectedModels = {
             modelA: availableGeminiModels[0],
-            modelB: availableGeminiModels[1] || availableGeminiModels[0]
+            modelB: availableGeminiModels[1] || availableGeminiModels[0],
+            modelC: null
         };
 
         const getInputText = (tc) => (tc?.user_input || tc?.input || '').trim();
@@ -347,10 +368,11 @@
         function updateModelLabels() {
             document.getElementById('modelA-name').textContent = selectedModels.modelA;
             document.getElementById('modelB-name').textContent = selectedModels.modelB;
+            document.getElementById('modelC-name').textContent = selectedModels.modelC || 'Model C';
         }
 
         function resetCards() {
-            ['modelA', 'modelB'].forEach(id => {
+            ['modelA', 'modelB', 'modelC'].forEach(id => {
                 document.getElementById(`${id}-expected`).textContent = '[ expected will appear after send ]';
                 document.getElementById(`${id}-actual`).textContent = '[ waiting for response ]';
                 document.getElementById(`${id}-pass`).textContent = 'Pass';
@@ -370,31 +392,60 @@
             if (!availableGeminiModels.includes(selectedModels.modelB)) {
                 selectedModels.modelB = second || first;
             }
+            if (selectedModels.modelC && !availableGeminiModels.includes(selectedModels.modelC)) {
+                selectedModels.modelC = null;
+            }
 
             const pairs = [
                 { selectId: 'modelASelect', key: 'modelA' },
-                { selectId: 'modelBSelect', key: 'modelB' }
+                { selectId: 'modelBSelect', key: 'modelB' },
+                { selectId: 'modelCSelect', key: 'modelC' }
             ];
 
             pairs.forEach(({ selectId, key }) => {
                 const select = document.getElementById(selectId);
                 if (!select) return;
-                select.innerHTML = '';
+                
+                // Model C has a "None" option
+                if (key === 'modelC') {
+                    select.innerHTML = '<option value="">-- None --</option>';
+                } else {
+                    select.innerHTML = '';
+                }
+                
                 availableGeminiModels.forEach(model => {
                     const option = document.createElement('option');
                     option.value = model;
                     option.textContent = model;
                     select.appendChild(option);
                 });
-                select.value = selectedModels[key];
+                
+                select.value = selectedModels[key] || '';
+                
                 select.addEventListener('change', (e) => {
-                    selectedModels[key] = e.target.value;
+                    selectedModels[key] = e.target.value || null;
+                    
+                    // Show/hide Model C card
+                    if (key === 'modelC') {
+                        const card = document.getElementById('modelC-card');
+                        if (selectedModels.modelC) {
+                            card.style.display = 'block';
+                        } else {
+                            card.style.display = 'none';
+                        }
+                    }
+                    
                     updateModelLabels();
                     resetCards();
                 });
             });
 
             updateModelLabels();
+            
+            // Initially hide Model C if not selected
+            if (!selectedModels.modelC) {
+                document.getElementById('modelC-card').style.display = 'none';
+            }
         }
 
         // Check backend health and load golden dataset
@@ -506,7 +557,7 @@
                 `;
                 console.log('✓ Using golden dataset expected for:', matched.case.eval_id);
             } else {
-                // Not a golden match: generate expected answer via llama3
+                // Not a golden match: generate expected answer via Gemini
                 expectedAnswer = await generateExpectedAnswer(value);
                 if (!expectedAnswer) {
                     expectedAnswer = '[expected not available]';
@@ -518,17 +569,20 @@
                     <strong>Test Input:</strong> ${value}<br>
                     <strong>Source:</strong> Generated Expected (not in golden dataset)
                 `;
-                console.log('✓ Generated expected answer via llama3');
+                console.log('✓ Generated expected answer via Gemini');
             }
 
             // Show expected in UI
             document.getElementById('modelA-expected').textContent = expectedAnswer;
             document.getElementById('modelB-expected').textContent = expectedAnswer;
+            if (selectedModels.modelC) {
+                document.getElementById('modelC-expected').textContent = expectedAnswer;
+            }
 
             // Generate model answers
             await generateAnswers(value);
             
-            // Evaluate with Ollama judge
+            // Evaluate with LLaMA judge
             await evaluateAllModels();
         });
 
@@ -558,7 +612,7 @@
             thresholdSpan.textContent = 'Evaluating...';
 
             try {
-                const judgeModel = 'ollama';
+                const judgeModel = 'llama70b';
                 const response = await fetch(`${API_URL}/evaluate`, {
                     method: 'POST',
                     headers: {
@@ -602,6 +656,12 @@
 
             const models = [selectedModels.modelA, selectedModels.modelB];
             const cardOrder = ['modelA', 'modelB'];
+            
+            if (selectedModels.modelC) {
+                models.push(selectedModels.modelC);
+                cardOrder.push('modelC');
+            }
+            
             cardOrder.forEach(cardId => {
                 const el = document.getElementById(`${cardId}-actual`);
                 el.textContent = '[ generating answer... ]';
@@ -639,7 +699,7 @@
                 console.log('Generated answers:', answers);
             } catch (error) {
                 console.error('Generation error:', error);
-                ['modelA', 'modelB'].forEach(cardId => {
+                cardOrder.forEach(cardId => {
                     const el = document.getElementById(`${cardId}-actual`);
                     el.textContent = `[error: ${error.message}]`;
                 });
@@ -685,6 +745,9 @@
         async function evaluateAllModels() {
             await evaluateModel('modelA');
             await evaluateModel('modelB');
+            if (selectedModels.modelC) {
+                await evaluateModel('modelC');
+            }
         }
 
         // Evaluate on clicking any actual box
