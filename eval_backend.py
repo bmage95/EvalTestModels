@@ -285,11 +285,11 @@ Respond ONLY in valid JSON on a single line, no code fences, no extra text:
         # Set GOOGLE_API_KEY for LiteLLM
         if self.gemini_api_key:
             os.environ["GOOGLE_API_KEY"] = self.gemini_api_key
-            # Use model name directly (LiteLLM auto-detects Google provider from env var)
-            gemini_model = model
+            # LiteLLM expects the provider prefix for Gemini
+            gemini_model = f"gemini/{model}"
         else:
             # Fallback to Ollama
-            gemini_model = "ollama/llama3.1"
+            gemini_model = "ollama/llama3"
         
         try:
             return self._llm_call(
