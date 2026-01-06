@@ -13,6 +13,7 @@ CORS(app)  # Enable CORS for frontend communication
 # Initialize evaluator and dataset loader
 evaluator = JudgeEvaluator()
 dataset_loader = GoldenDatasetLoader()
+DEFAULT_GEMINI_MODELS = ["gemini-1.5-flash", "gemini-1.5-pro"]
 
 
 @app.route('/api/health', methods=['GET'])
@@ -22,6 +23,8 @@ def health():
         'status': 'healthy',
         'ollama_available': evaluator.ollama_available,
         'openai_available': getattr(evaluator, 'openai_available', False),
+        'gemini_available': getattr(evaluator, 'gemini_available', False),
+        'gemini_default_models': DEFAULT_GEMINI_MODELS,
         'dataset_loaded': len(dataset_loader.get_test_cases()) > 0,
         'test_cases_available': len(dataset_loader.get_test_cases()),
         'message': 'Backend is running'
@@ -37,12 +40,12 @@ def evaluate():
     {
         "actual_answer": "string",
         "expected_answer": "string",
-        "judge_model": "string (ollama/gpt4)",
+        "judge_model": "string (ollama)",
         "judges": ["ollama"] (optional, default: ["ollama"])
     }
     """
     try:
-        data = request.json
+        data = request.json or {}
         
         actual_answer = data.get('actual_answer', '')
         expected_answer = data.get('expected_answer', '')
@@ -94,7 +97,7 @@ def evaluate_multi():
     }
     """
     try:
-        data = request.json
+        data = request.json or {}
         
         actual_answer = data.get('actual_answer', '')
         expected_answer = data.get('expected_answer', '')
@@ -152,13 +155,13 @@ def evaluate_multi():
 @app.route('/api/evaluate-all-models', methods=['POST'])
 def evaluate_all_models():
     """
-    Evaluate two models (Gemini, ChatGPT responses)
+    Evaluate multiple Gemini model responses side-by-side
     
     Expected JSON:
     {
-        "gemini_answer": "string", 
-        "chatgpt_answer": "string",
+        "answers": {"<model_name>": "string"},
         "expected_answer": "string",
+        "models": ["gemini-1.5-flash", "gemini-1.5-pro"],
         "judge_model": "ollama" (or gpt4)
     }
     """
@@ -167,15 +170,23 @@ def evaluate_all_models():
         
         expected = data.get('expected_answer', '')
         judge_model = data.get('judge_model', 'ollama').lower()
-        
+        answers_payload = data.get('answers') or {}
+        if not answers_payload:
+            # Backwards compatibility: pick any *_answer fields
+            for key, value in (data or {}).items():
+                if key.endswith('_answer') and isinstance(value, str):
+                    answers_payload[key.replace('_answer', '')] = value
+
         if not expected:
             return jsonify({'error': 'expected_answer is required'}), 400
-        
-        models = ['gemini_answer', 'chatgpt_answer']
+        if not answers_payload:
+            return jsonify({'error': 'answers payload is required'}), 400
+
+        models = data.get('models') or list(answers_payload.keys())
         results = {}
         
         for model_key in models:
-            actual = data.get(model_key, '')
+            actual = answers_payload.get(model_key, '')
             if not actual:
                 results[model_key] = {'error': 'No answer provided'}
                 continue
@@ -222,14 +233,14 @@ def generate_answers():
     {
         "input": "user question",          # optional if eval_id is provided
         "eval_id": "case id",             # optional; will pull user_input from dataset
-        "models": ["gemini","chatgpt"] (optional)
+        "models": ["gemini-1.5-flash","gemini-1.5-pro"] (optional)
     }
     """
     try:
         data = request.json or {}
         eval_id = data.get('eval_id')
         user_input = (data.get('input') or '').strip()
-        requested_models = data.get('models', ['gemini', 'chatgpt'])
+        requested_models = data.get('models', DEFAULT_GEMINI_MODELS)
 
         # Pull prompt from golden dataset if eval_id is provided
         if eval_id and not user_input:
@@ -243,34 +254,12 @@ def generate_answers():
         answers = {}
 
         for model_name in requested_models:
-            key = model_name.lower()
             try:
-                if key == 'chatgpt':
-                    if evaluator.openai_available:
-                        answers['chatgpt'] = {
-                            'text': evaluator.generate_with_gpt4(prompt, model="gpt-4o-mini")
-                        }
-                    elif evaluator.ollama_available:
-                        answers['chatgpt'] = {
-                            'text': evaluator.generate_with_ollama(prompt, model="llama3"),
-                            'note': 'OpenAI not configured; used Ollama fallback'
-                        }
-                    else:
-                        answers['chatgpt'] = {'error': 'ChatGPT not configured and no Ollama fallback'}
-
-                elif key == 'gemini':
-                    if evaluator.ollama_available:
-                        answers['gemini'] = {
-                            'text': evaluator.generate_with_ollama(prompt, model="llama3"),
-                            'note': 'Gemini not configured; used Ollama fallback'
-                        }
-                    else:
-                        answers['gemini'] = {'error': 'Gemini not configured and no Ollama fallback'}
-
-                else:
-                    answers[key] = {'error': f'Unknown model: {model_name}'}
+                answers[model_name] = {
+                    'text': evaluator.generate_with_gemini(prompt, model=model_name)
+                }
             except Exception as e:
-                answers[key] = {'error': str(e)}
+                answers[model_name] = {'error': str(e)}
 
         return jsonify({
             'eval_id': eval_id,
@@ -304,10 +293,10 @@ def generate_expected():
             expected = evaluator.generate_with_ollama(prompt, model="llama3")
             source = 'ollama:llama3'
         elif evaluator.openai_available:
-            expected = evaluator.generate_with_gpt4(prompt, model="gpt-4o-mini")
-            source = 'openai:gpt-4o-mini'
+            expected = evaluator.generate_with_ollama(prompt, model="llama2")
+            source = 'ollama:llama2'
         else:
-            return jsonify({'error': 'No generation backend available (Ollama or OpenAI)'}), 503
+            return jsonify({'error': 'No generation backend available (Ollama 3 or 2)'}), 503
 
         return jsonify({
             'expected': expected,
@@ -559,7 +548,7 @@ if __name__ == '__main__':
     print("  POST /api/dataset/evaluate-batch - Evaluate multiple test cases")
     print("  POST /api/evaluate - Single judge evaluation")
     print("  POST /api/evaluate-multi - Multi-judge consensus")
-    print("  POST /api/evaluate-all-models - Evaluate 3 models")
+    print("  POST /api/evaluate-all-models - Evaluate multiple Gemini models")
     print("  POST /api/generate-answers - Generate model outputs for UI")
     print("  POST /api/generate-expected - Generate expected when not in golden set")
     print("\nRunning on http://localhost:5000")

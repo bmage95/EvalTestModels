@@ -123,6 +123,41 @@
             border-radius: 4px;
         }
 
+        .model-selectors {
+            display: flex;
+            justify-content: center;
+            gap: 16px;
+            margin-bottom: 20px;
+        }
+
+        .model-select {
+            background-color: rgba(0, 0, 0, 0.2);
+            padding: 12px 16px;
+            color: white;
+            min-width: 220px;
+        }
+
+        .model-select label {
+            display: block;
+            font-size: 12px;
+            letter-spacing: 0.5px;
+            margin-bottom: 6px;
+            opacity: 0.8;
+        }
+
+        .model-select select {
+            width: 100%;
+            background-color: #1a1a1a;
+            color: white;
+            border: none;
+            padding: 10px 12px;
+            font-size: 14px;
+        }
+
+        .model-select select:hover {
+            background-color: #2a2a2a;
+        }
+
         .dataset-section.active {
             display: block;
         }
@@ -253,35 +288,44 @@
             </div>
         </div>
 
+        <div class="model-selectors">
+            <div class="model-select">
+                <label for="modelASelect">Model A</label>
+                <select id="modelASelect"></select>
+            </div>
+            <div class="model-select">
+                <label for="modelBSelect">Model B</label>
+                <select id="modelBSelect"></select>
+            </div>
+        </div>
+
         <div class="models-grid">
-            <!-- Gemini -->
             <div class="model-card">
-                <h2 class="model-name">Gemini</h2>
+                <h2 class="model-name" id="modelA-name">Model A</h2>
                 <div class="answer-container">
-                    <div class="answer-box" id="gemini-actual">
+                    <div class="answer-box" id="modelA-actual">
                         [ actual answer ]
                     </div>
                     <div class="divider"></div>
-                    <div class="answer-box" id="gemini-expected">
+                    <div class="answer-box" id="modelA-expected">
                         [ expected answer ]
                     </div>
                 </div>
-                <p class="eval-score">Eval Score: <span id="gemini-pass">Pass</span> & <span id="gemini-threshold">Threshold</span></p>
+                <p class="eval-score">Eval Score: <span id="modelA-pass">Pass</span> & <span id="modelA-threshold">Threshold</span></p>
             </div>
 
-            <!-- ChatGPT -->
             <div class="model-card">
-                <h2 class="model-name">ChatGPT</h2>
+                <h2 class="model-name" id="modelB-name">Model B</h2>
                 <div class="answer-container">
-                    <div class="answer-box" id="chatgpt-actual">
+                    <div class="answer-box" id="modelB-actual">
                         [ actual answer ]
                     </div>
                     <div class="divider"></div>
-                    <div class="answer-box" id="chatgpt-expected">
+                    <div class="answer-box" id="modelB-expected">
                         [ expected answer ]
                     </div>
                 </div>
-                <p class="eval-score">Eval Score: <span id="chatgpt-pass">Pass</span> & <span id="chatgpt-threshold">Threshold</span></p>
+                <p class="eval-score">Eval Score: <span id="modelB-pass">Pass</span> & <span id="modelB-threshold">Threshold</span></p>
             </div>
         </div>
     </div>
@@ -291,9 +335,67 @@
         let expectedAnswer = '';
         let currentTestCase = null;
         let testCases = [];
+        let availableGeminiModels = ['gemini-1.5-flash', 'gemini-1.5-pro'];
+        const selectedModels = {
+            modelA: availableGeminiModels[0],
+            modelB: availableGeminiModels[1] || availableGeminiModels[0]
+        };
 
         const getInputText = (tc) => (tc?.user_input || tc?.input || '').trim();
         const getExpectedText = (tc) => (tc?.expected_response || tc?.expected || '').trim();
+
+        function updateModelLabels() {
+            document.getElementById('modelA-name').textContent = selectedModels.modelA;
+            document.getElementById('modelB-name').textContent = selectedModels.modelB;
+        }
+
+        function resetCards() {
+            ['modelA', 'modelB'].forEach(id => {
+                document.getElementById(`${id}-expected`).textContent = '[ expected will appear after send ]';
+                document.getElementById(`${id}-actual`).textContent = '[ waiting for response ]';
+                document.getElementById(`${id}-pass`).textContent = 'Pass';
+                document.getElementById(`${id}-threshold`).textContent = 'Threshold';
+            });
+        }
+
+        function populateModelSelectors(models) {
+            if (Array.isArray(models) && models.length) {
+                availableGeminiModels = models;
+            }
+
+            const [first, second] = availableGeminiModels;
+            if (!availableGeminiModels.includes(selectedModels.modelA)) {
+                selectedModels.modelA = first;
+            }
+            if (!availableGeminiModels.includes(selectedModels.modelB)) {
+                selectedModels.modelB = second || first;
+            }
+
+            const pairs = [
+                { selectId: 'modelASelect', key: 'modelA' },
+                { selectId: 'modelBSelect', key: 'modelB' }
+            ];
+
+            pairs.forEach(({ selectId, key }) => {
+                const select = document.getElementById(selectId);
+                if (!select) return;
+                select.innerHTML = '';
+                availableGeminiModels.forEach(model => {
+                    const option = document.createElement('option');
+                    option.value = model;
+                    option.textContent = model;
+                    select.appendChild(option);
+                });
+                select.value = selectedModels[key];
+                select.addEventListener('change', (e) => {
+                    selectedModels[key] = e.target.value;
+                    updateModelLabels();
+                    resetCards();
+                });
+            });
+
+            updateModelLabels();
+        }
 
         // Check backend health and load golden dataset
         window.addEventListener('load', async () => {
@@ -301,6 +403,7 @@
                 const response = await fetch(`${API_URL}/health`);
                 const data = await response.json();
                 console.log('Backend Status:', data);
+                populateModelSelectors(data.gemini_default_models);
                 
                 if (!data.ollama_available) {
                     console.warn('⚠️ Ollama not available. Install from https://ollama.ai');
@@ -312,6 +415,7 @@
                 }
             } catch (error) {
                 console.error('Backend not reachable. Make sure to run: python app.py', error);
+                populateModelSelectors();
             }
         });
 
@@ -361,19 +465,7 @@
                 <strong>Status:</strong> Ready to evaluate - click Send
             `;
             
-            // Clear expected boxes
-            document.getElementById('gemini-expected').textContent = '[ expected will appear after send ]';
-            document.getElementById('chatgpt-expected').textContent = '[ expected will appear after send ]';
-            
-            // Clear actual answers
-            document.getElementById('gemini-actual').textContent = '[ waiting for response ]';
-            document.getElementById('chatgpt-actual').textContent = '[ waiting for response ]';
-            
-            // Clear scores
-            document.getElementById('gemini-pass').textContent = 'Pass';
-            document.getElementById('gemini-threshold').textContent = 'Threshold';
-            document.getElementById('chatgpt-pass').textContent = 'Pass';
-            document.getElementById('chatgpt-threshold').textContent = 'Threshold';
+            resetCards();
             
             // Auto-fill input field with test case input
             document.getElementById('inputField').value = getInputText(currentTestCase);
@@ -395,8 +487,7 @@
             input.value = '';
 
             // Reset expected box until we set it
-            document.getElementById('gemini-expected').textContent = '[ expected will appear after send ]';
-            document.getElementById('chatgpt-expected').textContent = '[ expected will appear after send ]';
+            resetCards();
 
             // Ask backend to find golden case by input (trim/case-insensitive)
             const matched = await lookupGoldenByInput(value);
@@ -431,8 +522,8 @@
             }
 
             // Show expected in UI
-            document.getElementById('gemini-expected').textContent = expectedAnswer;
-            document.getElementById('chatgpt-expected').textContent = expectedAnswer;
+            document.getElementById('modelA-expected').textContent = expectedAnswer;
+            document.getElementById('modelB-expected').textContent = expectedAnswer;
 
             // Generate model answers
             await generateAnswers(value);
@@ -452,6 +543,7 @@
             const passSpan = document.getElementById(`${modelType}-pass`);
             const thresholdSpan = document.getElementById(`${modelType}-threshold`);
             const actualEl = document.getElementById(`${modelType}-actual`);
+            const modelName = selectedModels[modelType] || modelType;
 
             const actualAnswer = actualEl.textContent.trim();
             if (!actualAnswer || actualAnswer.startsWith('[ waiting') || actualAnswer.startsWith('[error')) {
@@ -495,8 +587,7 @@
 
                 passSpan.textContent = passed ? `PASS (${passScore.toFixed(2)})(user intent)` : `FAIL (${passScore.toFixed(2)})(user intent)`;
                 thresholdSpan.textContent = `quality/similarity score: ${threshScore.toFixed(2)}`;
-
-                console.log(`${modelType} evaluation:`, result);
+                console.log(`${modelName} evaluation:`, result);
 
             } catch (error) {
                 console.error('Evaluation error:', error);
@@ -509,9 +600,10 @@
         async function generateAnswers(promptText) {
             if (!promptText) return;
 
-            const models = ['gemini', 'chatgpt'];
-            models.forEach(model => {
-                const el = document.getElementById(`${model}-actual`);
+            const models = [selectedModels.modelA, selectedModels.modelB];
+            const cardOrder = ['modelA', 'modelB'];
+            cardOrder.forEach(cardId => {
+                const el = document.getElementById(`${cardId}-actual`);
                 el.textContent = '[ generating answer... ]';
             });
 
@@ -532,10 +624,10 @@
                 }
 
                 const answers = data.answers || {};
-                const setAnswer = (key) => {
-                    const el = document.getElementById(`${key}-actual`);
-                    if (!el) return;
-                    const payload = answers[key] || {};
+                cardOrder.forEach((cardId, idx) => {
+                    const modelKey = models[idx];
+                    const el = document.getElementById(`${cardId}-actual`);
+                    const payload = answers[modelKey] || {};
                     if (payload.text) {
                         el.textContent = payload.text;
                     } else if (payload.error) {
@@ -543,14 +635,12 @@
                     } else {
                         el.textContent = '[ no answer returned ]';
                     }
-                };
-
-                models.forEach(setAnswer);
+                });
                 console.log('Generated answers:', answers);
             } catch (error) {
                 console.error('Generation error:', error);
-                models.forEach(model => {
-                    const el = document.getElementById(`${model}-actual`);
+                ['modelA', 'modelB'].forEach(cardId => {
+                    const el = document.getElementById(`${cardId}-actual`);
                     el.textContent = `[error: ${error.message}]`;
                 });
             }
@@ -593,8 +683,8 @@
         }
 
         async function evaluateAllModels() {
-            await evaluateModel('gemini');
-            await evaluateModel('chatgpt');
+            await evaluateModel('modelA');
+            await evaluateModel('modelB');
         }
 
         // Evaluate on clicking any actual box

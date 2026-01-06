@@ -33,10 +33,9 @@ class JudgeEvaluator:
     def __init__(self, ollama_url: str = "http://localhost:11434"):
         self.ollama_url = ollama_url
         self.ollama_available = self._check_ollama()
-        
-        # Initialize API clients if keys available
-        self.openai_client = openai.OpenAI() if openai else None
-        self.openai_available = self.openai_client is not None
+        self.gemini_api_key = os.getenv("GEMINI_API_KEY")
+        self.gemini_available = bool(self.gemini_api_key)
+    
     
     def _check_ollama(self) -> bool:
         """Check if Ollama is running"""
@@ -192,6 +191,41 @@ Respond in JSON format:
             return result.get("response", "").strip()
         except Exception as e:
             raise RuntimeError(f"Ollama generation failed: {str(e)}")
+
+    def generate_with_gemini(self, prompt: str, model: str = "gemini-1.5-flash") -> str:
+        """Generate a response using Gemini API; falls back to Ollama when not configured."""
+        if self.gemini_api_key:
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/{model}:generateContent"
+            payload = {
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {"temperature": 0.6}
+            }
+            try:
+                response = requests.post(
+                    url,
+                    params={"key": self.gemini_api_key},
+                    headers={"Content-Type": "application/json"},
+                    json=payload,
+                    timeout=60
+                )
+                response.raise_for_status()
+                data = response.json() or {}
+                candidates = data.get("candidates") or []
+                if not candidates:
+                    raise RuntimeError("no candidates returned")
+                parts = candidates[0].get("content", {}).get("parts", [])
+                for part in parts:
+                    text = part.get("text")
+                    if text:
+                        return text.strip()
+                raise RuntimeError("empty response from Gemini")
+            except Exception as e:
+                raise RuntimeError(f"Gemini generation failed: {str(e)}")
+
+        if self.ollama_available:
+            return self.generate_with_ollama(prompt, model="llama3")
+
+        raise RuntimeError("Gemini API not configured and no Ollama fallback available")
 
     def generate_with_gpt4(self, prompt: str, model: str = "gpt-4o-mini") -> str:
         """Generate a response using GPT-4o"""

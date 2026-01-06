@@ -267,9 +267,11 @@ curl -X POST http://localhost:5000/api/evaluate-multi \
 curl -X POST http://localhost:5000/api/evaluate-all-models \
   -H "Content-Type: application/json" \
   -d '{
-    "claude_answer": "Claude response here",
-    "gemini_answer": "Gemini response here",
-    "chatgpt_answer": "ChatGPT response here",
+    "answers": {
+      "gemini-1.5-flash": "Gemini Flash response here",
+      "gemini-1.5-pro": "Gemini Pro response here"
+    },
+    "models": ["gemini-1.5-flash", "gemini-1.5-pro"],
     "expected_answer": "Expected answer here",
     "judge_model": "ollama"
   }'
