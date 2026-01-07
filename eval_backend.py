@@ -68,6 +68,7 @@ class JudgeEvaluator:
         self.gemini_api_key = os.getenv("GEMINI_API_KEY")
         self.gemini_available = bool(self.gemini_api_key)
         self.litellm_available = LITELLM_AVAILABLE
+        self.ollama_host = os.getenv("OLLAMA_BASE_URL", "http://localhost:11434")
         self.ollama_available = self._check_ollama()
         
         # Vector DB for semantic scoring
@@ -101,7 +102,7 @@ class JudgeEvaluator:
         """Check if Ollama is running via direct HTTP health check"""
         try:
             import requests
-            response = requests.get("http://localhost:11434/api/tags", timeout=2)
+            response = requests.get(f"{self.ollama_host}/api/tags", timeout=2)
             return response.status_code == 200
         except Exception as e:
             print(f"Ollama health check failed: {e}")
